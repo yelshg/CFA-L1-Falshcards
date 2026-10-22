@@ -81,6 +81,16 @@
   .empty{padding:60px 20px;text-align:center;color:var(--slate)}
   kbd{background:#eef2f7;border:1px solid #d6dee7;border-bottom-width:2px;border-radius:5px;padding:1px 6px;font-size:11px;color:var(--slate)}
   @media(max-width:560px){select{min-width:44vw}.front h2{font-size:20px}}
+  /* Search */
+  .search-field{flex:1 1 100%;min-width:0}
+  .search-wrap{position:relative;display:flex;align-items:center}
+  .search-ic{position:absolute;left:12px;width:18px;height:18px;fill:var(--slate);pointer-events:none}
+  #search{width:100%;padding:10px 38px 10px 38px;border:1px solid var(--line);border-radius:10px;background:#fff;font:inherit;font-size:15px;color:inherit}
+  #search:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+  #search::-webkit-search-cancel-button{display:none}
+  .search-clear{position:absolute;right:6px;width:28px;height:28px;border:0;border-radius:50%;background:transparent;color:var(--slate);font-size:20px;line-height:1;cursor:pointer}
+  .search-clear:hover{background:var(--bg)}
+  mark.hit{background:#ffe58f;color:inherit;padding:0 1px;border-radius:2px}
 </style>
 </head>
 <body>
@@ -112,6 +122,14 @@
     <div class="spacer"></div>
     <button class="btn" id="shuffle" title="Shuffle this deck">Shuffle</button>
     <button class="btn primary" id="flipBtn">Flip</button>
+    <div class="field search-field">
+      <label for="search">Search</label>
+      <div class="search-wrap">
+        <svg class="search-ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 3a5.5 5.5 0 1 0 3.4 9.83l3.64 3.64a.75.75 0 1 0 1.06-1.06l-3.64-3.64A5.5 5.5 0 0 0 8.5 3Zm-4 5.5a4 4 0 1 1 8 0 4 4 0 0 1-8 0Z"/></svg>
+        <input type="search" id="search" placeholder="Search cards: names, definitions, formulas, symbols…" autocomplete="off" spellcheck="false">
+        <button type="button" class="search-clear" id="searchClear" aria-label="Clear search" hidden>&times;</button>
+      </div>
+    </div>
   </div>
 
   <div class="meta">
@@ -124,7 +142,7 @@
 
   <div class="nav">
     <button class="btn" id="prev">&larr; Prev</button>
-    <span class="mid"><kbd>Space</kbd> flip &nbsp; <kbd>&larr;</kbd> <kbd>&rarr;</kbd> navigate</span>
+    <span class="mid"><kbd>Space</kbd> flip &nbsp; <kbd>&larr;</kbd> <kbd>&rarr;</kbd> navigate &nbsp; <kbd>/</kbd> search</span>
     <button class="btn" id="next">Next &rarr;</button>
   </div>
 </div>
@@ -134,6 +152,25 @@
 const DATA = JSON.parse(document.getElementById('data').textContent);
 const $ = id => document.getElementById(id);
 let deck = [], idx = 0, flipped = false;
+
+// ---- Search: every word typed must appear somewhere on the card (any case, accents ignored) ----
+const fold = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+const stripTags = s => String(s||'').replace(/<[^>]*>/g,' ').replace(/&[a-z#0-9]+;/gi,' ');
+const texWords = s => String(s||'').replace(/\\(mathrm|text|operatorname)\s*/g,' ').replace(/\\[a-zA-Z]+/g,' ').replace(/[{}^_\\$]/g,' ');
+function cardText(c, meta){
+  const parts = [c.name, c.def, c.note, meta.mod, meta.subj, meta.subjId, c.type];
+  if(c.tex) parts.push(texWords(c.tex));
+  (c.terms||[]).forEach(t=>{ parts.push(t.d); if(t.s) parts.push(t.s.t==='m' ? texWords(t.s.v) : t.s.v); });
+  return fold(stripTags(parts.filter(Boolean).join(' '))).replace(/\s+/g,' ');
+}
+const searchWords = () => fold($('search').value).split(/\s+/).filter(Boolean);
+// Highlight the typed words in plain text parts of a card (names, definitions, notes), leaving HTML tags alone.
+function mark(html){
+  const words = searchWords(); if(!words.length || !html) return html || '';
+  const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const re = new RegExp('(' + words.map(esc).join('|') + ')', 'gi');
+  return String(html).split(/(<[^>]*>)/).map(part => part.startsWith('<') ? part : part.replace(re, '<mark class="hit">$1</mark>')).join('');
+}
 
 function buildSubject(){
   const sel = $('subject');
@@ -190,8 +227,16 @@ function buildDeck(){
       if(ctype!=='formula') (m.concepts||[]).forEach(c=> deck.push({...c, ...meta}));
     });
   });
+  const words = searchWords();
+  if(words.length){
+    deck = deck.filter(c=>{ c._text = c._text || cardText(c, c); return words.every(w=> c._text.includes(w)); });
+  }
   idx = 0; flipped = false;
-  $('deckLabel').textContent = deck.length ? `${deck.length} card${deck.length>1?'s':''}` : '';
+  const q = $('search').value.trim();
+  $('deckLabel').textContent = deck.length
+    ? `${deck.length} card${deck.length>1?'s':''}` + (q ? ` matching “${q}”` : '')
+    : '';
+  $('searchClear').hidden = !q;
   render();
 }
 function katexInto(el, tex, display){
@@ -200,21 +245,25 @@ function katexInto(el, tex, display){
 }
 function render(){
   const host = $('cardHost');
-  if(!deck.length){ host.innerHTML = '<div class="card"><div class="empty">No cards for this selection.</div></div>';
+  if(!deck.length){
+    const q = $('search').value.trim();
+    host.innerHTML = '<div class="card"><div class="empty">' + (q
+      ? 'No cards match “' + q.replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch])) + '”' + ($('subject').value!=='ALL' || $('ctype').value!=='ALL' || selectedTopicKeys() ? ' in this selection. Try All subjects, Formulas + Concepts and All topics.' : '.')
+      : 'No cards for this selection.') + '</div></div>';
     $('counter').textContent=''; $('bar').style.width='0'; return; }
   const c = deck[idx];
   const isConcept = c.type === 'concept';
   const card = document.createElement('div');
   card.className = 'card' + (flipped?' flipped':'') + (isConcept?' concept':'');
   const back = isConcept
-    ? `<div class="fname">${c.name}</div>
-       <div class="def">${c.def||''}</div>
-       ${c.note?`<div class="note">${c.note}</div>`:''}`
-    : `<div class="fname">${c.name}</div>
+    ? `<div class="fname">${mark(c.name)}</div>
+       <div class="def">${mark(c.def||'')}</div>
+       ${c.note?`<div class="note">${mark(c.note)}</div>`:''}`
+    : `<div class="fname">${mark(c.name)}</div>
        <div class="formula" id="fx"></div>
        <div class="where-h">where:</div>
        <table class="where"><tbody id="wh"></tbody></table>
-       ${c.note?`<div class="note">${c.note}</div>`:''}`;
+       ${c.note?`<div class="note">${mark(c.note)}</div>`:''}`;
   const hint = isConcept
     ? (flipped?'Tap to hide':'Tap to reveal explanation')
     : (flipped?'Tap to hide':'Tap to reveal formula');
@@ -225,7 +274,7 @@ function render(){
       <div class="modname">${c.mod}</div>
     </div>
     <div class="front">
-      <h2>${c.name}</h2>
+      <h2>${mark(c.name)}</h2>
     </div>
     <div class="back">${back}</div>
     <div class="flip-hint">${hint}</div>`;
@@ -239,7 +288,7 @@ function render(){
       const td1=document.createElement('td'); td1.className='sym';
       if(t.s.t==='m'){ katexInto(td1, t.s.v, false); } else { td1.innerHTML=t.s.v; }
       const td2=document.createElement('td'); td2.className='eq'; td2.textContent='=';
-      const td3=document.createElement('td'); td3.innerHTML=t.d;
+      const td3=document.createElement('td'); td3.innerHTML=mark(t.d);
       tr.append(td1,td2,td3); wh.appendChild(tr);
     });
   }
@@ -253,6 +302,13 @@ function shuffle(){ for(let i=deck.length-1;i>0;i--){const j=Math.floor(Math.ran
 
 $('subject').addEventListener('change', ()=>{ buildTopic(); buildDeck(); });
 $('ctype').addEventListener('change', buildDeck);
+let searchTimer = null;
+$('search').addEventListener('input', ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(buildDeck, 150); });
+$('search').addEventListener('keydown', e=>{
+  if(e.key==='Escape'){ $('search').value=''; buildDeck(); $('search').blur(); }
+  if(e.key==='Enter'){ $('search').blur(); }
+});
+$('searchClear').addEventListener('click', ()=>{ $('search').value=''; buildDeck(); $('search').focus(); });
 function togglePanel(open){
   const p=$('msPanel'); const show = open===undefined ? p.hidden : open;
   p.hidden = !show; $('msBtn').setAttribute('aria-expanded', show?'true':'false');
@@ -265,7 +321,8 @@ $('next').addEventListener('click', next);
 $('prev').addEventListener('click', prev);
 $('shuffle').addEventListener('click', shuffle);
 document.addEventListener('keydown', e=>{
-  if(e.target.tagName==='SELECT') return;
+  if(e.target.tagName==='SELECT' || e.target.tagName==='INPUT') return;
+  if(e.key==='/'){ e.preventDefault(); $('search').focus(); return; }
   if(e.code==='Space'){ e.preventDefault(); flip(); }
   else if(e.code==='ArrowRight'){ next(); }
   else if(e.code==='ArrowLeft'){ prev(); }
