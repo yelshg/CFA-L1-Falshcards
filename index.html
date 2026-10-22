@@ -91,6 +91,21 @@
   .search-clear{position:absolute;right:6px;width:28px;height:28px;border:0;border-radius:50%;background:transparent;color:var(--slate);font-size:20px;line-height:1;cursor:pointer}
   .search-clear:hover{background:var(--bg)}
   mark.hit{background:#ffe58f;color:inherit;padding:0 1px;border-radius:2px}
+  .sr-panel{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:50;background:#fff;border:1px solid #cdd6e0;
+    border-radius:12px;box-shadow:0 14px 34px rgba(16,42,67,.18);max-height:min(62vh,560px);overflow:auto;padding:6px}
+  .sr-head{display:flex;justify-content:space-between;font-size:12px;color:var(--slate);padding:4px 8px 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  .sr-item{padding:10px 12px;border-radius:9px;cursor:pointer;border-left:3px solid transparent}
+  .sr-item + .sr-item{margin-top:2px}
+  .sr-item:hover,.sr-item.active{background:#f2f6fb;border-left-color:var(--accent)}
+  .sr-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .sr-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#fff;background:var(--navy);padding:2px 7px;border-radius:999px}
+  .sr-tag.formula{background:#1f6feb}
+  .sr-tag.concept{background:var(--good)}
+  .sr-name{font-weight:700;color:var(--navy);font-size:14.5px}
+  .sr-mod{font-size:11.5px;color:var(--slate);margin-top:3px}
+  .sr-body{font-size:13.5px;line-height:1.5;color:#243244;margin-top:6px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+  .sr-fx{margin-top:6px;padding:6px 8px;background:#f7f9fc;border:1px solid #eef2f7;border-radius:8px;overflow-x:auto;font-size:13px}
+  .sr-more{font-size:12px;color:var(--slate);text-align:center;padding:10px}
 </style>
 </head>
 <body>
@@ -126,8 +141,9 @@
       <label for="search">Search</label>
       <div class="search-wrap">
         <svg class="search-ic" viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 3a5.5 5.5 0 1 0 3.4 9.83l3.64 3.64a.75.75 0 1 0 1.06-1.06l-3.64-3.64A5.5 5.5 0 0 0 8.5 3Zm-4 5.5a4 4 0 1 1 8 0 4 4 0 0 1-8 0Z"/></svg>
-        <input type="search" id="search" placeholder="Search cards: names, definitions, formulas, symbols…" autocomplete="off" spellcheck="false">
+        <input type="search" id="search" role="combobox" aria-controls="srPanel" aria-expanded="false" placeholder="Search cards: names, definitions, formulas, symbols…" autocomplete="off" spellcheck="false">
         <button type="button" class="search-clear" id="searchClear" aria-label="Clear search" hidden>&times;</button>
+        <div class="sr-panel" id="srPanel" role="listbox" aria-label="Search results" hidden></div>
       </div>
     </div>
   </div>
@@ -238,6 +254,56 @@ function buildDeck(){
     : '';
   $('searchClear').hidden = !q;
   render();
+  if(document.activeElement === $('search')) renderResults(); else srOpen(false);
+}
+// ---- Search dropdown: matching cards with their text, click to open ----
+const SR_MAX = 60;
+let srActive = -1;
+function srOpen(show){
+  const p = $('srPanel'); p.hidden = !show; $('search').setAttribute('aria-expanded', show?'true':'false');
+  if(!show) srActive = -1;
+}
+// The terms/note text that matched, for formula cards whose match is not in the name.
+function srExtra(c){
+  const words = searchWords(); if(!words.length) return '';
+  const hits = w => words.some(x=> fold(stripTags(w)).includes(x));
+  const parts = [];
+  (c.terms||[]).forEach(tm=>{ if(hits(tm.d)) parts.push(tm.d); });
+  if(c.note && hits(c.note)) parts.push(c.note);
+  return parts.slice(0,3).join(' · ');
+}
+function renderResults(){
+  const p = $('srPanel');
+  if(!$('search').value.trim()){ srOpen(false); p.innerHTML=''; return; }
+  srActive = -1;
+  p.innerHTML = `<div class="sr-head"><span>${deck.length} result${deck.length===1?'':'s'}</span><span>&uarr; &darr; to move &middot; Enter to open</span></div>`;
+  if(!deck.length){ p.insertAdjacentHTML('beforeend', '<div class="sr-more">No matching cards.</div>'); srOpen(true); return; }
+  deck.slice(0, SR_MAX).forEach((c,i)=>{
+    const isC = c.type==='concept';
+    const row = document.createElement('div');
+    row.className='sr-item'; row.setAttribute('role','option'); row.dataset.i=i;
+    const extra = isC ? '' : srExtra(c);
+    row.innerHTML = `<div class="sr-top"><span class="sr-tag">${c.subjId}</span><span class="sr-tag ${isC?'concept':'formula'}">${isC?'Concept':'Formula'}</span><span class="sr-name">${mark(c.name)}</span></div>
+      <div class="sr-mod">${c.mod}</div>
+      ${isC ? `<div class="sr-body">${mark(c.def||'')}</div>` : `<div class="sr-fx"></div>${extra?`<div class="sr-body">${mark(extra)}</div>`:''}`}`;
+    if(!isC) katexInto(row.querySelector('.sr-fx'), c.tex, false);
+    row.addEventListener('mousedown', e=> e.preventDefault()); // keep focus in the box
+    row.addEventListener('click', ()=> openResult(i));
+    p.appendChild(row);
+  });
+  if(deck.length > SR_MAX) p.insertAdjacentHTML('beforeend', `<div class="sr-more">Showing ${SR_MAX} of ${deck.length}. Keep typing to narrow, or browse them all with Next.</div>`);
+  p.scrollTop = 0;
+  srOpen(true);
+}
+function srMove(d){
+  const rows = $('srPanel').querySelectorAll('.sr-item'); if(!rows.length) return;
+  srActive = (srActive + d + rows.length) % rows.length;
+  rows.forEach((r,k)=> r.classList.toggle('active', k===srActive));
+  rows[srActive].scrollIntoView({block:'nearest'});
+}
+function openResult(i){
+  idx = i; flipped = true; render(); srOpen(false); $('search').blur();
+  $('cardHost').scrollIntoView({behavior:'smooth', block:'start'});
 }
 function katexInto(el, tex, display){
   try{ katex.render(tex, el, {displayMode:!!display, throwOnError:false, strict:false}); }
@@ -305,9 +371,14 @@ $('ctype').addEventListener('change', buildDeck);
 let searchTimer = null;
 $('search').addEventListener('input', ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(buildDeck, 150); });
 $('search').addEventListener('keydown', e=>{
-  if(e.key==='Escape'){ $('search').value=''; buildDeck(); $('search').blur(); }
-  if(e.key==='Enter'){ $('search').blur(); }
+  const open = !$('srPanel').hidden;
+  if(e.key==='Escape'){ if(open){ srOpen(false); } else { $('search').value=''; buildDeck(); $('search').blur(); } }
+  else if(e.key==='ArrowDown'){ e.preventDefault(); if(!open) renderResults(); else srMove(1); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); if(open) srMove(-1); }
+  else if(e.key==='Enter'){ e.preventDefault(); if(deck.length && $('search').value.trim()) openResult(srActive>=0 ? srActive : 0); else $('search').blur(); }
 });
+$('search').addEventListener('focus', ()=>{ if($('search').value.trim()) renderResults(); });
+$('search').addEventListener('blur', ()=> setTimeout(()=> srOpen(false), 120));
 $('searchClear').addEventListener('click', ()=>{ $('search').value=''; buildDeck(); $('search').focus(); });
 function togglePanel(open){
   const p=$('msPanel'); const show = open===undefined ? p.hidden : open;
